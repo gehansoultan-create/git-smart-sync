@@ -23,6 +23,7 @@ export class SyncAllCommand {
     }
 
     const branchNames = localBranches.map(b => b.name);
-    await this.syncCommand.execute(branchNames);
+    // Bulk operation: always ask for confirmation before pushing to every local branch.
+    await this.syncCommand.execute(branchNames, { alwaysConfirm: true });
   }
 }

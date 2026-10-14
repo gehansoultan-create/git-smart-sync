@@ -207,6 +207,11 @@
           "default": "fast-forward",
           "description": "Branch synchronization strategy. 'fast-forward' aborts if divergence is detected to prevent accidental loss; 'force-with-lease' overrides remote if safe."
         },
+        "gitSmartSync.confirmBeforeSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Ask for confirmation before pushing to other branches. A confirmation is always shown for 'Sync All' and when the strategy is 'force-with-lease'."
+        },
         "gitSmartSync.autoPullBeforePush": {
           "type": "boolean",
           "default": false,

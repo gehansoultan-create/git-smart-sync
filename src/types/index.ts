@@ -26,6 +26,10 @@ export interface SyncBranchResult {
   status: SyncStatus;
   message?: string;
   durationMs?: number;
+  /** Local branch tip before it was moved to HEAD (useful to recover with `git branch -f`). */
+  previousLocalSha?: string;
+  /** Remote branch tip that was overwritten by a force-with-lease push. */
+  previousRemoteSha?: string;
 }
 
 /**
@@ -38,6 +42,7 @@ export interface SyncBatchReport {
   successCount: number;
   failedCount: number;
   skippedCount: number;
+  upToDateCount: number;
   totalDurationMs: number;
 }
 

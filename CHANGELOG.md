@@ -5,6 +5,28 @@ All notable changes to the **Git Smart Branch Sync** extension will be documente
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Branch picker no longer pre-selects every branch.** Pressing Enter in the QuickPick used to push the current commit to all local and remote branches.
+- **Local branch pointer is moved only after a successful push.** Previously `git branch -f` ran first, so a rejected push left the local branch moved with no rollback.
+- **Safety checks use the remote's real state.** The remote is fetched before syncing and each branch is compared against its remote-tracking tip, not only the (possibly stale) local branch. `force-with-lease` is pinned to the inspected remote tip.
+- **No more error toasts from background updates.** The status bar and tree view no longer show "No active Git repository" or open a repository picker when you switch editors in a non-Git or multi-root workspace.
+- Repository detection no longer mistakes `/path/repo2` for being inside `/path/repo`.
+- Cancelled syncs are reported as skipped instead of failed.
+
+### Changed
+- **Dry-Run is now a real simulation.** It runs the same checks as a real sync and reports branches that would be blocked (diverged), are already up-to-date, or would be pushed. It uses the last fetched remote state and makes no network calls.
+- Branches already at HEAD are reported as `up-to-date` and are not pushed.
+- Results record the overwritten remote / previous local SHA when `force-with-lease` is used, so they can be recovered.
+
+### Added
+- `gitSmartSync.confirmBeforeSync` setting. A confirmation dialog is also always shown for **Sync All** and for the `force-with-lease` strategy.
+- Integration tests that run against real temporary repositories with a bare remote (fast-forward, diverged, remote-ahead, force-with-lease, rejected push, dry-run).
+- Tests with a mocked `vscode` module covering the branch picker defaults, confirmation dialogs, dry-run report, silent background repository lookups and extension activation.
+
+---
+
 ## [1.2.0] - 2026-10-12
 
 ### Added

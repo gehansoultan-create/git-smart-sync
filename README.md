@@ -38,8 +38,8 @@ Instead of repeatedly checking out branches or crafting fragile terminal loops, 
 * **Environment Presets**: Define branch groups (e.g. `production: ["main", "release"]`) to push across pipelines instantaneously.
 * **UI Preset Management**: Create and delete presets directly from the SCM view with zero config editing.
 * **Multi-Remote Switching**: Seamlessly change your default Git remote on the fly.
-* **Divergence Guardrails**: Built-in ancestor validation (`merge-base`) prevents destructive pointer rewrites unless explicitly configured.
-* **Dry-Run Simulation**: Preview exactly what branches would be pushed without executing network operations.
+* **Divergence Guardrails**: Before every sync the remote is fetched and each branch is checked (`merge-base`) against both its local and remote tip. Diverged branches are refused unless the `force-with-lease` strategy is configured, and local branch pointers only move *after* the push succeeded.
+* **Dry-Run Simulation**: Runs the same safety checks as a real sync against the last fetched remote state (no network access, nothing is changed), and reports which branches would be pushed, are already up-to-date, or would be blocked.
 * **Dedicated Output Logger**: Real-time logging of Git commands and stderr diagnostics in the editor output tab.
 * **Cancellable Background Progress**: Native progress notifications with mid-flight cancellation support.
 * **Status Bar Integration**: Real-time indicator in your editor's bottom bar for immediate access.
@@ -57,7 +57,7 @@ Instead of repeatedly checking out branches or crafting fragile terminal loops, 
 | `gitSmartSync.addPreset` | **Add Branch Preset...** | Interactive wizard to group branches into a new reusable preset. |
 | `gitSmartSync.deletePreset` | **Delete Branch Preset...** | Remove a configured branch preset group. |
 | `gitSmartSync.selectRemote` | **Select Default Git Remote...** | Choose which Git remote to target for synchronization. |
-| `gitSmartSync.dryRun` | **Dry-Run Sync (Preview Only)** | Simulates push operations without touching remotes. |
+| `gitSmartSync.dryRun` | **Dry-Run Sync (Preview Only)** | Reports what a sync would do (push / up-to-date / blocked) without touching remotes. |
 | `gitSmartSync.prune` | **Prune Stale Remote Branches** | Cleans up local references to deleted remote branches. |
 | `gitSmartSync.showOutput` | **Show Output Logs** | Opens dedicated output channel displaying Git command logs. |
 | `gitSmartSync.refreshView` | **Refresh Branches View** | Updates the SCM sidebar tree view. |
@@ -73,6 +73,7 @@ Customize the extension via **Settings** (`Ctrl + ,` / `Cmd + ,` -> search `gitS
 | `gitSmartSync.defaultRemote` | `string` | `"origin"` | Default Git remote name to push and sync to. |
 | `gitSmartSync.showStatusBar` | `boolean` | `true` | Show or hide the sync button in the editor status bar. |
 | `gitSmartSync.syncStrategy` | `string` | `"fast-forward"` | Safety strategy: `"fast-forward"` prevents overwriting diverged branches; `"force-with-lease"` overrides if safe. |
+| `gitSmartSync.confirmBeforeSync` | `boolean` | `false` | Ask for confirmation before pushing. A confirmation is always shown for **Sync All** and when the strategy is `force-with-lease`. |
 | `gitSmartSync.autoPullBeforePush` | `boolean` | `false` | Automatically execute `git pull` on the active branch before pushing. |
 | `gitSmartSync.presets` | `object` | `{"release": ["main", "production"], "development": ["dev", "staging"]}` | Custom branch presets for quick group synchronization. |
 

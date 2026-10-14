@@ -29,6 +29,11 @@ export class DryRunCommand {
       repo.currentBranch
     );
 
+    if (allBranches.length === 0) {
+      vscode.window.showWarningMessage('No local or remote branches found in this repository.');
+      return;
+    }
+
     const targetBranches = await this.quickPick.promptBranchSelection(allBranches, repo.currentBranch);
     if (!targetBranches || targetBranches.length === 0) {
       return;
@@ -37,6 +42,7 @@ export class DryRunCommand {
     const options = {
       remote: defaultRemote,
       strategy: this.configService.syncStrategy,
+      pullBeforePush: this.configService.autoPullBeforePush,
       dryRun: true
     };
 
@@ -49,11 +55,20 @@ export class DryRunCommand {
       options
     );
 
-    const summaryLines = report.results.map(r => `• ${r.branch}: ${r.message}`);
+    const marker: Record<string, string> = {
+      success: 'WOULD PUSH',
+      'up-to-date': 'UP-TO-DATE',
+      failed: 'BLOCKED',
+      skipped: 'SKIPPED'
+    };
+    const summaryLines = report.results.map(r => `• [${marker[r.status] ?? r.status}] ${r.branch}: ${r.message}`);
     this.logger?.info(`[Dry-Run] Result:\n${summaryLines.join('\n')}`);
     vscode.window.showInformationMessage(
-      `[Dry-Run Preview] Checked ${report.results.length} branches:\n${summaryLines.join('\n')}`,
-      { modal: true }
+      `[Dry-Run Preview] Checked ${report.results.length} branches (${report.successCount} would push, ${report.upToDateCount} up-to-date, ${report.failedCount} blocked).`,
+      {
+        modal: true,
+        detail: `${summaryLines.join('\n')}\n\nBased on the last fetched state of '${defaultRemote}' — no network access was used, nothing was changed.`
+      }
     );
   }
 }

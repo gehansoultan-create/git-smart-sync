@@ -24,7 +24,8 @@ export class QuickPickService {
         branchName: b.name,
         description,
         detail,
-        picked: true // Pre-checked by default
+        // Nothing is pre-checked: pressing Enter must never push to every branch by accident.
+        picked: false
       };
     });
 
@@ -32,7 +33,7 @@ export class QuickPickService {
       canPickMany: true,
       matchOnDescription: true,
       matchOnDetail: true,
-      placeHolder: 'Select branches to synchronize and push changes to:'
+      placeHolder: `Tick the branches that should receive the current commit of '${currentBranch}':`
     });
 
     if (!selected || selected.length === 0) {

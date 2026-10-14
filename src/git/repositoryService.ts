@@ -48,12 +48,22 @@ export class RepositoryService {
   }
 
   /**
-   * Get the primary repository context, prompting user if multiple repositories exist.
+   * Get the primary repository context.
+   *
+   * By default (`interactive: true`, used by user-triggered commands) this shows an error when no
+   * repository exists and prompts when several are open. Background callers (status bar, tree view)
+   * must pass `interactive: false`: it never shows a message or a prompt, falling back to the
+   * last repository the user picked (or the first one).
    */
-  public async getActiveRepository(): Promise<GitRepositoryContext | undefined> {
+  public async getActiveRepository(
+    options: { interactive?: boolean } = {}
+  ): Promise<GitRepositoryContext | undefined> {
+    const interactive = options.interactive ?? true;
     const repos = await this.getRepositories();
     if (repos.length === 0) {
-      vscode.window.showErrorMessage('No active Git repository detected in the current workspace.');
+      if (interactive) {
+        vscode.window.showErrorMessage('No active Git repository detected in the current workspace.');
+      }
       return undefined;
     }
 
@@ -65,10 +75,15 @@ export class RepositoryService {
     const activeDoc = vscode.window.activeTextEditor?.document;
     if (activeDoc && !activeDoc.isUntitled) {
       const docPath = activeDoc.uri.fsPath;
-      const matched = repos.find(r => docPath.startsWith(r.rootPath));
+      const matched = repos.find(r => this.isInside(r.rootPath, docPath));
       if (matched) {
+        this.lastRepoRoot = matched.rootPath;
         return matched;
       }
+    }
+
+    if (!interactive) {
+      return repos.find(r => r.rootPath === this.lastRepoRoot) ?? repos[0];
     }
 
     // Prompt user to select repository
@@ -82,7 +97,19 @@ export class RepositoryService {
       placeHolder: 'Select Git repository to synchronize:'
     });
 
+    if (selected) {
+      this.lastRepoRoot = selected.repo.rootPath;
+    }
     return selected?.repo;
+  }
+
+  /** Root of the repository most recently chosen by the user or matched from the active editor. */
+  private lastRepoRoot?: string;
+
+  /** True if `filePath` is `root` itself or lives under it (unlike startsWith, `/a/repo2` is not inside `/a/repo`). */
+  private isInside(root: string, filePath: string): boolean {
+    const relative = path.relative(root, filePath);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
   }
 
   /**

@@ -104,6 +104,46 @@ export class BranchService {
   }
 
   /**
+   * Resolve the commit SHA that HEAD points to, or undefined if the repository has no commits.
+   */
+  public async resolveHead(cwd: string): Promise<string | undefined> {
+    try {
+      return await this.runner.execute(['rev-parse', '--verify', 'HEAD'], cwd);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Resolve several full ref names (e.g. `refs/heads/main`) to their SHAs in one git call.
+   * Refs that do not exist are simply absent from the returned map (no error is raised,
+   * so expected misses do not pollute the output log).
+   */
+  public async resolveRefs(refNames: string[], cwd: string): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (refNames.length === 0) {
+      return result;
+    }
+
+    try {
+      const output = await this.runner.execute(
+        ['for-each-ref', '--format=%(refname) %(objectname)', ...refNames],
+        cwd
+      );
+      const wanted = new Set(refNames);
+      for (const line of output.split('\n')) {
+        const [ref, sha] = line.trim().split(' ');
+        if (ref && sha && wanted.has(ref)) {
+          result.set(ref, sha);
+        }
+      }
+    } catch {
+      // Treat any failure as "refs not found"; callers handle missing refs explicitly.
+    }
+    return result;
+  }
+
+  /**
    * Get ahead/behind commit counts between two branches or refs.
    */
   public async getDivergenceCounts(

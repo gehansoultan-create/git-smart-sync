@@ -106,7 +106,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // ─── Auto-update status bar on active document change ─────────────────────
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
-      const repo = await repoService.getActiveRepository();
+      // Background update: must stay silent (no error toast / prompt) in non-Git folders.
+      const repo = await repoService.getActiveRepository({ interactive: false });
       if (repo) {
         statusBar.update(repo.currentBranch);
       }
@@ -114,7 +115,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Initial status bar setup
-  repoService.getActiveRepository().then(repo => {
+  repoService.getActiveRepository({ interactive: false }).then(repo => {
     if (repo) {
       statusBar.update(repo.currentBranch);
     }

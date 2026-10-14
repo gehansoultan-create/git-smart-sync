@@ -17,7 +17,14 @@ export class SyncCommand {
     private readonly logger?: OutputChannelLogger
   ) {}
 
-  public async execute(branchesToSync?: string[] | BranchTreeItem | string): Promise<void> {
+  /**
+   * @param branchesToSync Branches to sync; when omitted the user is asked to tick them.
+   * @param executeOptions `alwaysConfirm` forces the confirmation dialog (used by bulk operations like Sync All).
+   */
+  public async execute(
+    branchesToSync?: string[] | BranchTreeItem | string,
+    executeOptions: { alwaysConfirm?: boolean } = {}
+  ): Promise<void> {
     const repo = await this.repoService.getActiveRepository();
     if (!repo) {
       return;
@@ -62,6 +69,28 @@ export class SyncCommand {
       pullBeforePush: this.configService.autoPullBeforePush
     };
 
+    // Pushing to several branches is hard to undo, so ask first when the user opted in,
+    // for bulk operations, and always when the strategy can overwrite diverged history.
+    const usesForce = options.strategy === 'force-with-lease';
+    if (this.configService.confirmBeforeSync || executeOptions.alwaysConfirm || usesForce) {
+      const detail =
+        `Branches: ${targetBranches.join(', ')}` +
+        (usesForce
+          ? `\n\nStrategy is 'force-with-lease': branches whose history diverged WILL be overwritten on '${defaultRemote}'.`
+          : '\n\nBranches that cannot be fast-forwarded are skipped and reported.');
+
+      const choice = await vscode.window.showWarningMessage(
+        `Push the current commit of '${repo.currentBranch}' to ${targetBranches.length} branch(es) on '${defaultRemote}'?`,
+        { modal: true, detail },
+        'Sync'
+      );
+
+      if (choice !== 'Sync') {
+        vscode.window.showInformationMessage('Branch synchronization cancelled.');
+        return;
+      }
+    }
+
     this.logger?.info(`Initiating sync for branches: [${targetBranches.join(', ')}] -> ${defaultRemote} (strategy: ${options.strategy})`);
 
     await vscode.window.withProgress(
@@ -97,10 +126,16 @@ export class SyncCommand {
             this.logger?.show();
           }
         } else {
-          this.logger?.info(`Successfully synced ${report.successCount} branches in ${(report.totalDurationMs / 1000).toFixed(1)}s.`);
-          vscode.window.showInformationMessage(
-            `Successfully synced ${report.successCount} branches in ${(report.totalDurationMs / 1000).toFixed(1)}s.`
-          );
+          const parts = [`${report.successCount} synced`];
+          if (report.upToDateCount > 0) {
+            parts.push(`${report.upToDateCount} already up-to-date`);
+          }
+          if (report.skippedCount > 0) {
+            parts.push(`${report.skippedCount} skipped`);
+          }
+          const summary = `Sync finished: ${parts.join(', ')} (${(report.totalDurationMs / 1000).toFixed(1)}s).`;
+          this.logger?.info(summary);
+          vscode.window.showInformationMessage(summary);
         }
       }
     );

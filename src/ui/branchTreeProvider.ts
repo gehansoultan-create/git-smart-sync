@@ -58,7 +58,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchTreeIte
   }
 
   public async getChildren(element?: BranchTreeItem): Promise<BranchTreeItem[]> {
-    const repo = await this.repoService.getActiveRepository();
+    // Rendering the tree must never raise error toasts or repository prompts.
+    const repo = await this.repoService.getActiveRepository({ interactive: false });
     if (!repo) {
       return [];
     }
