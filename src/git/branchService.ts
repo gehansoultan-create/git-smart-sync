@@ -116,8 +116,10 @@ export class BranchService {
 
   /**
    * Resolve several full ref names (e.g. `refs/heads/main`) to their SHAs in one git call.
-   * Refs that do not exist are simply absent from the returned map (no error is raised,
-   * so expected misses do not pollute the output log).
+   * Refs that do not exist are simply absent from the returned map: `git for-each-ref` exits
+   * successfully with no output for them, so an expected miss is not an error.
+   * A real git failure (not a repository, corrupt repository, git missing, timeout) is NOT a
+   * miss: the error propagates so callers cannot mistake it for "the branch does not exist".
    */
   public async resolveRefs(refNames: string[], cwd: string): Promise<Map<string, string>> {
     const result = new Map<string, string>();
@@ -125,20 +127,16 @@ export class BranchService {
       return result;
     }
 
-    try {
-      const output = await this.runner.execute(
-        ['for-each-ref', '--format=%(refname) %(objectname)', ...refNames],
-        cwd
-      );
-      const wanted = new Set(refNames);
-      for (const line of output.split('\n')) {
-        const [ref, sha] = line.trim().split(' ');
-        if (ref && sha && wanted.has(ref)) {
-          result.set(ref, sha);
-        }
+    const output = await this.runner.execute(
+      ['for-each-ref', '--format=%(refname) %(objectname)', ...refNames],
+      cwd
+    );
+    const wanted = new Set(refNames);
+    for (const line of output.split('\n')) {
+      const [ref, sha] = line.trim().split(' ');
+      if (ref && sha && wanted.has(ref)) {
+        result.set(ref, sha);
       }
-    } catch {
-      // Treat any failure as "refs not found"; callers handle missing refs explicitly.
     }
     return result;
   }

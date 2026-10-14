@@ -18,8 +18,10 @@ interface BranchPlan {
   localSha?: string;
   /** Tip of the remote-tracking branch as of the last fetch (undefined if the branch is new on the remote). */
   remoteSha?: string;
-  /** True when proceeding requires --force-with-lease (diverged local or remote history). */
-  force: boolean;
+  /** True when the local branch has commits that are not in HEAD and will be overwritten locally. */
+  overwriteLocal: boolean;
+  /** True when the remote branch is not an ancestor of HEAD, so the push needs --force-with-lease. */
+  forceRemote: boolean;
 }
 
 const short = (sha: string | undefined): string => (sha ? sha.substring(0, 7) : 'none');
@@ -49,7 +51,7 @@ export class SyncEngine {
     const results: SyncBranchResult[] = [];
     const stepIncrement = branches.length > 0 ? 100 / branches.length : 100;
 
-    const headSha = branches.length > 0 ? await this.branchService.resolveHead(cwd) : undefined;
+    let headSha = branches.length > 0 ? await this.branchService.resolveHead(cwd) : undefined;
     if (branches.length > 0 && !headSha) {
       for (const branch of branches) {
         results.push({ branch, status: 'failed', message: 'Cannot resolve HEAD (does the repository have any commits?)' });
@@ -58,7 +60,28 @@ export class SyncEngine {
     }
 
     if (!options.dryRun && branches.length > 0) {
-      await this.refreshRemote(options.remote, cwd, token);
+      // Without a fresh view of the remote every safety decision would rest on stale data,
+      // so a failed fetch stops the whole sync before anything is pushed or moved.
+      const fetchError = await this.refreshRemote(options.remote, cwd, token);
+      if (fetchError) {
+        const message = `Could not fetch '${options.remote}': ${fetchError} Nothing was pushed and no local branch was changed.`;
+        return this.buildReport(options.remote, this.stopAll(branches, message, token), startTime);
+      }
+
+      // Pull happens once, up front: the pull moves HEAD, and every branch (before or after the
+      // current one in the list) must be planned and pushed with that same final HEAD.
+      // If the pull fails, HEAD is not the integrated state the user asked for, so publishing it
+      // to the other branches would be wrong: the whole sync stops before anything is pushed or moved.
+      if (options.pullBeforePush && branches.includes(currentBranch)) {
+        const pullError = await this.pullCurrentBranch(options.remote, currentBranch, cwd, token);
+        if (pullError) {
+          const message =
+            `Sync stopped because the pull of '${currentBranch}' from '${options.remote}' failed. ` +
+            `Nothing was pushed and no local branch was changed. Git said: ${pullError}`;
+          return this.buildReport(options.remote, this.stopAll(branches, message, token), startTime);
+        }
+        headSha = (await this.branchService.resolveHead(cwd)) ?? headSha;
+      }
     }
 
     for (const branch of branches) {
@@ -125,14 +148,47 @@ export class SyncEngine {
 
   /**
    * Update remote-tracking refs so divergence checks and force-with-lease compare against
-   * the remote's real state. A failed fetch is not fatal: git itself still rejects
-   * non-fast-forward pushes, and the lease we pass is pinned to the last known remote tip.
+   * the remote's real state. `--prune` drops remote-tracking refs of branches that were deleted
+   * on the remote, otherwise a stale ref could make a deleted branch look "up-to-date".
+   *
+   * Returns the error message when the fetch failed (the caller must then abort), else undefined.
    */
-  private async refreshRemote(remote: string, cwd: string, token?: vscode.CancellationToken): Promise<void> {
+  private async refreshRemote(remote: string, cwd: string, token?: vscode.CancellationToken): Promise<string | undefined> {
     try {
-      await this.runner.execute(['fetch', remote], cwd, token);
-    } catch {
-      // Already logged by GitRunner; continue with the last known remote state.
+      await this.runner.execute(['fetch', '--prune', remote], cwd, token);
+      return undefined;
+    } catch (err: unknown) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * Result for every selected branch when the sync is stopped before any branch was processed.
+   * A user cancellation is reported as skipped, anything else as failed with `message`.
+   */
+  private stopAll(branches: string[], message: string, token?: vscode.CancellationToken): SyncBranchResult[] {
+    const cancelled = token?.isCancellationRequested === true;
+    return branches.map(branch => ({
+      branch,
+      status: cancelled ? 'skipped' : 'failed',
+      message: cancelled ? 'Operation cancelled by user' : message
+    }));
+  }
+
+  /**
+   * Pull the current branch from the remote. Returns the error message on failure, else undefined.
+   */
+  private async pullCurrentBranch(
+    remote: string,
+    branch: string,
+    cwd: string,
+    token?: vscode.CancellationToken
+  ): Promise<string | undefined> {
+    try {
+      await this.runner.execute(['pull', remote, branch], cwd, token);
+      return undefined;
+    } catch (err: unknown) {
+      return err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -157,10 +213,14 @@ export class SyncEngine {
     const base = { branch, headSha, localSha, remoteSha };
 
     if (remoteSha === headSha && (localSha === undefined || localSha === headSha)) {
-      return { ...base, action: 'up-to-date', force: false };
+      return { ...base, action: 'up-to-date', overwriteLocal: false, forceRemote: false };
     }
 
-    let force = false;
+    // Two independent decisions: (1) may the LOCAL branch pointer be moved over its own commits,
+    // (2) does the REMOTE push need --force-with-lease. A diverged local branch says nothing about
+    // whether the remote can simply be fast-forwarded, so each has its own condition.
+    let overwriteLocal = false;
+    let forceRemote = false;
 
     // Moving another local branch to HEAD must not silently drop commits that only exist on it.
     if (!isCurrent && localSha && localSha !== headSha) {
@@ -169,17 +229,19 @@ export class SyncEngine {
           return {
             ...base,
             action: 'blocked',
-            force: false,
+            overwriteLocal: false,
+            forceRemote: false,
             reason: `Local branch '${branch}' has commits that are not in HEAD (diverged); refusing to move it. Use the 'force-with-lease' strategy to override.`
           };
         }
-        force = true;
+        overwriteLocal = true;
       }
     }
 
     // The remote branch must be an ancestor of HEAD for a plain (fast-forward) push.
-    // For the current branch with auto-pull enabled, the pull will integrate remote commits first.
-    const pullWillIntegrate = isCurrent && options.pullBeforePush === true;
+    // A dry-run never pulls, so for the current branch it assumes the pull would integrate the
+    // remote commits; a real sync has already pulled, so the check below is the real one.
+    const pullWillIntegrate = isCurrent && options.pullBeforePush === true && options.dryRun === true;
     if (remoteSha && remoteSha !== headSha && !pullWillIntegrate) {
       if (!(await this.branchService.canFastForward(remoteSha, headSha, cwd))) {
         // The current branch is never force-pushed; the user has to pull or merge first.
@@ -187,15 +249,16 @@ export class SyncEngine {
           return {
             ...base,
             action: 'blocked',
-            force: false,
+            overwriteLocal: false,
+            forceRemote: false,
             reason: `${options.remote}/${branch} has commits that are not in HEAD (remote is ahead or diverged). Pull/merge first${isCurrent ? '' : ", or use the 'force-with-lease' strategy to override"}.`
           };
         }
-        force = true;
+        forceRemote = true;
       }
     }
 
-    return { ...base, action: isCurrent ? 'push-current' : 'push-other', force };
+    return { ...base, action: isCurrent ? 'push-current' : 'push-other', overwriteLocal, forceRemote };
   }
 
   /**
@@ -212,15 +275,13 @@ export class SyncEngine {
     const target = `${options.remote}/${branch}`;
 
     if (plan.action === 'push-current') {
-      if (options.pullBeforePush) {
-        await this.runner.execute(['pull', options.remote, branch], cwd, token);
-      }
+      // Any pull-before-push already happened once, up front, in syncBranches.
       await this.runner.execute(['push', options.remote, branch], cwd, token);
       return { branch, status: 'success', message: `Successfully pushed to ${target}` };
     }
 
     const pushArgs = ['push', options.remote];
-    if (plan.force) {
+    if (plan.forceRemote) {
       // Pin the lease to the remote tip we inspected; if somebody pushed since, git refuses.
       pushArgs.push(plan.remoteSha ? `--force-with-lease=refs/heads/${branch}:${plan.remoteSha}` : '--force-with-lease');
     }
@@ -230,7 +291,11 @@ export class SyncEngine {
     const notes: string[] = [];
     const result: SyncBranchResult = { branch, status: 'success' };
 
-    if (plan.force && plan.remoteSha) {
+    // Wording only: the push command above still runs, but when the remote branch was already
+    // at HEAD (as of the fetch) git transfers nothing, so the message must not claim a push.
+    const remoteAlreadyAtHead = plan.remoteSha === plan.headSha;
+
+    if (plan.forceRemote && plan.remoteSha) {
       result.previousRemoteSha = plan.remoteSha;
       notes.push(`overwrote remote ${short(plan.remoteSha)}`);
     }
@@ -239,28 +304,41 @@ export class SyncEngine {
       try {
         await this.runner.execute(['branch', '-f', branch, plan.headSha], cwd, token);
         result.previousLocalSha = plan.localSha;
-        if (plan.force) {
+        if (plan.overwriteLocal) {
           notes.push(`local branch was ${short(plan.localSha)}`);
+        } else if (remoteAlreadyAtHead) {
+          notes.push(`local branch moved from ${short(plan.localSha)}`);
         }
       } catch (err: unknown) {
         // e.g. the branch is checked out in another worktree. The push itself already succeeded.
         const reason = err instanceof Error ? err.message : String(err);
-        notes.push(`pushed, but local branch '${branch}' was not moved: ${reason}`);
+        notes.push(`local branch '${branch}' was not moved: ${reason}`);
       }
     }
 
-    result.message = `Successfully pushed to ${target}${notes.length ? ` (${notes.join('; ')})` : ''}`;
+    const headline = remoteAlreadyAtHead
+      ? `${target} was already at ${short(plan.headSha)}; nothing was pushed`
+      : `Successfully pushed to ${target}`;
+    result.message = `${headline}${notes.length ? ` (${notes.join('; ')})` : ''}`;
     return result;
   }
 
   private describeDryRun(plan: BranchPlan, options: SyncOptions): string {
     const target = `${options.remote}/${plan.branch}`;
     const details: string[] = [];
+    if (plan.remoteSha === plan.headSha) {
+      // Only the local branch pointer would change; there is nothing to send to the remote.
+      const discarded = plan.overwriteLocal ? ', discarding its own commits' : '';
+      return `[Dry Run] ${target} is already at ${short(plan.headSha)}; nothing to push (would only move local branch '${plan.branch}' from ${short(plan.localSha)}${discarded})`;
+    }
     if (plan.remoteSha === undefined) {
       details.push('new branch on remote');
     }
-    if (plan.force) {
-      details.push('would use --force-with-lease and overwrite diverged commits');
+    if (plan.forceRemote) {
+      details.push('would use --force-with-lease and overwrite commits on the remote');
+    }
+    if (plan.overwriteLocal) {
+      details.push(`local branch (${short(plan.localSha)}) has commits not in HEAD and would be overwritten`);
     }
     if (plan.action === 'push-current' && options.pullBeforePush) {
       details.push('would pull first');

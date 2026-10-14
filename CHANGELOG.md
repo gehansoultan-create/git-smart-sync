@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Branch picker no longer pre-selects every branch.** Pressing Enter in the QuickPick used to push the current commit to all local and remote branches.
 - **Local branch pointer is moved only after a successful push.** Previously `git branch -f` ran first, so a rejected push left the local branch moved with no rollback.
 - **Safety checks use the remote's real state.** The remote is fetched before syncing and each branch is compared against its remote-tracking tip, not only the (possibly stale) local branch. `force-with-lease` is pinned to the inspected remote tip.
+- **A failed fetch now stops the sync.** If the remote cannot be fetched, no branch is pushed or moved and every branch reports the fetch error, instead of continuing on stale remote data. (Dry-Run never fetches and is unaffected.)
+- **The fetch uses `--prune`**, so a branch deleted on the remote is no longer reported as up-to-date because of a leftover remote-tracking ref.
+- **Moving a local branch and force-pushing the remote are separate decisions.** A diverged local branch no longer causes `--force-with-lease` on the remote (or an "overwrote remote" note) when the remote can simply be fast-forwarded. Dry-Run now says which of the two would be overwritten.
+- **`autoPullBeforePush` pulls once, before planning.** All selected branches are pushed with the HEAD that results from the pull, regardless of their order. If the pull fails, the whole sync stops: no branch is pushed or moved, every selected branch reports that the pull failed (with git's error), and a cancellation during the pull is reported as skipped.
+- **Results no longer claim a push that did not happen.** When the remote branch was already at HEAD, the report says "already at … nothing was pushed" (and, if applicable, that the local branch was moved) instead of "Successfully pushed". Dry-Run words it the same way.
+- **A git failure while reading branch refs is reported as a failure.** It used to be treated as "the branch does not exist", which could show a wrong "new branch on remote" plan.
 - **No more error toasts from background updates.** The status bar and tree view no longer show "No active Git repository" or open a repository picker when you switch editors in a non-Git or multi-root workspace.
 - Repository detection no longer mistakes `/path/repo2` for being inside `/path/repo`.
 - Cancelled syncs are reported as skipped instead of failed.
