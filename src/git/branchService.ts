@@ -1,22 +1,31 @@
 import { GitRunner } from './gitRunner';
 import { BranchInfo } from '../types';
+import { assertSafeRemoteName, remoteNameProblem } from './validation';
+
+/** Field separator for `for-each-ref` output (ASCII unit separator: cannot appear in a ref name or subject line). */
+const FIELD_SEP = '\u001f';
 
 export class BranchService {
   constructor(private readonly runner: GitRunner) {}
 
   /**
    * Retrieve all local branches with their latest commit subject and active status.
+   *
+   * Uses `for-each-ref refs/heads` rather than `git branch`: the latter also prints a pseudo entry
+   * such as `(HEAD detached at abc1234)` that is not a branch, and `%(refname:short)` turns a
+   * branch into `heads/<name>` when a tag with the same name exists. `lstrip=2` is unambiguous.
    */
   public async getLocalBranches(cwd: string, currentBranch: string): Promise<BranchInfo[]> {
     try {
-      const format = '%(refname:short)|%(objectname:short)|%(contents:subject)';
-      const output = await this.runner.execute(['branch', `--format=${format}`], cwd);
-      const lines = output.split('\n').map(l => l.trim()).filter(Boolean);
+      const format = ['%(refname:lstrip=2)', '%(objectname:short)', '%(contents:subject)'].join(FIELD_SEP);
+      const output = await this.runner.execute(['for-each-ref', `--format=${format}`, 'refs/heads'], cwd);
+      const lines = output.split('\n').filter(Boolean);
 
       const branches: BranchInfo[] = [];
 
       for (const line of lines) {
-        const [name, hash, subject] = line.split('|');
+        const [name, hash, ...subjectParts] = line.split(FIELD_SEP);
+        const subject = subjectParts.join(FIELD_SEP);
         if (!name) continue;
 
         const isCurrent = name === currentBranch;
@@ -39,17 +48,26 @@ export class BranchService {
    * Retrieve all remote branches, stripped of the remote prefix.
    */
   public async getRemoteBranches(cwd: string, remote: string): Promise<BranchInfo[]> {
+    if (remoteNameProblem(remote)) {
+      return [];
+    }
     try {
-      const output = await this.runner.execute(['branch', '-r', '--format=%(refname:short)'], cwd);
+      // Only this remote's refs are listed, so no prefix matching is needed on other remotes.
+      const output = await this.runner.execute(
+        ['for-each-ref', '--format=%(refname)', `refs/remotes/${remote}`],
+        cwd
+      );
       const lines = output.split('\n').map(l => l.trim()).filter(Boolean);
 
       const branches: BranchInfo[] = [];
-      const remotePrefix = `${remote}/`;
+      const remotePrefix = `refs/remotes/${remote}/`;
 
       for (const line of lines) {
-        if (line.includes('HEAD')) continue;
         if (line.startsWith(remotePrefix)) {
           const name = line.substring(remotePrefix.length);
+          // `<remote>/HEAD` is a symbolic pointer to the default branch, not a branch. Only that exact
+          // name is skipped: the old substring test also hid branches like `feature/AHEAD-fix`.
+          if (name === 'HEAD') continue;
           branches.push({
             name,
             isRemote: true,
@@ -165,6 +183,7 @@ export class BranchService {
    * Prune stale remote tracking branches.
    */
   public async pruneRemote(remote: string, cwd: string): Promise<string> {
-    return this.runner.execute(['remote', 'prune', remote], cwd);
+    assertSafeRemoteName(remote);
+    return this.runner.execute(['remote', 'prune', '--', remote], cwd);
   }
 }

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No more error toasts from background updates.** The status bar and tree view no longer show "No active Git repository" or open a repository picker when you switch editors in a non-Git or multi-root workspace.
 - Repository detection no longer mistakes `/path/repo2` for being inside `/path/repo`.
 - Cancelled syncs are reported as skipped instead of failed.
+- **A malicious `gitSmartSync.defaultRemote` can no longer run commands.** A remote such as `--upload-pack=<cmd>` was passed to git as an option, and workspace settings can supply that value. Remote and branch names are now validated before any git command runs, and every command that takes a remote or branch puts `--` in front of it.
+- **Branch lists are accurate.** A remote branch whose name merely contains `HEAD` (e.g. `feature/AHEAD-fix`) was hidden, a detached HEAD showed up as a branch called `(HEAD detached at ...)`, a `|` in a commit subject cut the subject short, and a tag named like a branch turned its name into `heads/<name>`. Branches are now listed with `git for-each-ref`.
 
 ### Changed
 - **Dry-Run is now a real simulation.** It runs the same checks as a real sync and reports branches that would be blocked (diverged), are already up-to-date, or would be pushed. It uses the last fetched remote state and makes no network calls.

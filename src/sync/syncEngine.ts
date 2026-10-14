@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { GitRunner } from '../git/gitRunner';
 import { BranchService } from '../git/branchService';
+import { branchNameProblem, remoteNameProblem } from '../git/validation';
 import { SyncOptions, SyncBatchReport, SyncBranchResult } from '../types';
 
 /**
@@ -51,6 +52,17 @@ export class SyncEngine {
     const results: SyncBranchResult[] = [];
     const stepIncrement = branches.length > 0 ? 100 / branches.length : 100;
 
+    // The remote name comes from settings and is put on git command lines: refuse anything git
+    // could read as an option (e.g. `--upload-pack=<cmd>`) before a single command is run.
+    const remoteProblem = branches.length > 0 ? remoteNameProblem(options.remote) : undefined;
+    if (remoteProblem) {
+      const message = `Invalid remote name '${options.remote}': ${remoteProblem}. Nothing was run.`;
+      for (const branch of branches) {
+        results.push({ branch, status: 'failed', message });
+      }
+      return this.buildReport(options.remote, results, startTime);
+    }
+
     let headSha = branches.length > 0 ? await this.branchService.resolveHead(cwd) : undefined;
     if (branches.length > 0 && !headSha) {
       for (const branch of branches) {
@@ -90,6 +102,16 @@ export class SyncEngine {
           branch,
           status: 'skipped',
           message: 'Operation cancelled by user'
+        });
+        continue;
+      }
+
+      const branchProblem = branchNameProblem(branch);
+      if (branchProblem) {
+        results.push({
+          branch,
+          status: 'failed',
+          message: `Invalid branch name '${branch}': ${branchProblem}. Nothing was pushed or moved.`
         });
         continue;
       }
@@ -155,7 +177,7 @@ export class SyncEngine {
    */
   private async refreshRemote(remote: string, cwd: string, token?: vscode.CancellationToken): Promise<string | undefined> {
     try {
-      await this.runner.execute(['fetch', '--prune', remote], cwd, token);
+      await this.runner.execute(['fetch', '--prune', '--', remote], cwd, token);
       return undefined;
     } catch (err: unknown) {
       return err instanceof Error ? err.message : String(err);
@@ -185,7 +207,7 @@ export class SyncEngine {
     token?: vscode.CancellationToken
   ): Promise<string | undefined> {
     try {
-      await this.runner.execute(['pull', remote, branch], cwd, token);
+      await this.runner.execute(['pull', '--', remote, branch], cwd, token);
       return undefined;
     } catch (err: unknown) {
       return err instanceof Error ? err.message : String(err);
@@ -276,16 +298,17 @@ export class SyncEngine {
 
     if (plan.action === 'push-current') {
       // Any pull-before-push already happened once, up front, in syncBranches.
-      await this.runner.execute(['push', options.remote, branch], cwd, token);
+      await this.runner.execute(['push', '--', options.remote, branch], cwd, token);
       return { branch, status: 'success', message: `Successfully pushed to ${target}` };
     }
 
-    const pushArgs = ['push', options.remote];
+    const pushArgs = ['push'];
     if (plan.forceRemote) {
       // Pin the lease to the remote tip we inspected; if somebody pushed since, git refuses.
       pushArgs.push(plan.remoteSha ? `--force-with-lease=refs/heads/${branch}:${plan.remoteSha}` : '--force-with-lease');
     }
-    pushArgs.push(`${plan.headSha}:refs/heads/${branch}`);
+    // `--` ends option parsing: whatever follows is a remote or a refspec, never an option.
+    pushArgs.push('--', options.remote, `${plan.headSha}:refs/heads/${branch}`);
     await this.runner.execute(pushArgs, cwd, token);
 
     const notes: string[] = [];
@@ -302,7 +325,7 @@ export class SyncEngine {
 
     if (plan.localSha && plan.localSha !== plan.headSha) {
       try {
-        await this.runner.execute(['branch', '-f', branch, plan.headSha], cwd, token);
+        await this.runner.execute(['branch', '-f', '--', branch, plan.headSha], cwd, token);
         result.previousLocalSha = plan.localSha;
         if (plan.overwriteLocal) {
           notes.push(`local branch was ${short(plan.localSha)}`);
