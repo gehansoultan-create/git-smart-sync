@@ -57,23 +57,29 @@ describe('RepositoryService.getActiveRepository', () => {
   let root;
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'ignore' });
   const folder = p => ({ uri: { fsPath: p }, name: path.basename(p), index: 0 });
+
   const makeRepo = name => {
     const dir = path.join(root, name);
     fs.mkdirSync(dir);
     git(dir, 'init', '-q');
-    return dir;
+
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: dir,
+      encoding: 'utf8'
+    }).trim();
   };
 
   beforeEach(() => {
     vscode.reset();
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gss-ui-')));
   });
+
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const service = () => new RepositoryService(new GitRunner());
 
   test('no repository: user-triggered call shows an error, background call stays silent', async () => {
-    vscode.workspace.workspaceFolders = [folder(root)]; // plain folder, not a git repo
+    vscode.workspace.workspaceFolders = [folder(root)];
 
     assert.strictEqual(await service().getActiveRepository({ interactive: false }), undefined);
     assert.strictEqual(vscode.calls.error.length, 0, 'background lookup must not show an error');
@@ -125,7 +131,11 @@ describe('BranchTreeProvider', () => {
         return undefined;
       }
     };
-    const provider = new BranchTreeProvider(repoService, {}, { defaultRemote: 'origin', getPresets: () => [] });
+
+    const provider = new BranchTreeProvider(repoService, {}, {
+      defaultRemote: 'origin',
+      getPresets: () => []
+    });
 
     assert.deepStrictEqual(await provider.getChildren(), []);
     assert.deepStrictEqual(seen, [{ interactive: false }]);
